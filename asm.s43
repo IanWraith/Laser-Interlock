@@ -1,0 +1,165 @@
+        #include <msp430x20x3.h>   
+        
+        ; P1.0 - Sensor Input #1
+        ; P1.1 - Sensor Input #2
+        ; P1.2 - 
+        ; P1.3 - Keyswitch Input
+        ; P1.4 - Door LED Indicator output (on door)
+        ; P1.5 - Indicator LED output (on box)#1 : Blue
+        ; P1.6 - Relay Output
+        ; P1.7 - Buzzer
+        ; P2.7 - Indicator LED output (on box)#2 : Red
+        
+        ; R4 is the state store ..
+        ; 0 - Active state - Relay on / Red LED on
+        ; 1 - Tripped state - Relay off / Blue LED on
+        ; 2 - Keyswitch override state
+        
+        ; R5 is a keyswitch state store
+        ; R6 is a temp counter
+        
+       
+        ; Standard setup
+        ORG     0FC00h
+      
+        ; Set up stack
+init:   MOV     #0280h, SP        
+        ; Stop the watchdog timer
+        MOV.W   #WDTPW+WDTHOLD,&WDTCTL
+	; Port 1
+        ; Set P1.7,P1.6,P1.5,P1.4 as outputs rest as inputs
+        BIS.B #11110000b,&P1DIR   
+        ; Set P1.7,P1.6,P1.5,P1.4 to low
+        BIC.B #11110000b,&P1OUT
+        ; Port 2
+        ; Set P2.7 & P2.6 as GPIO pins
+        BIC.B #11000000b,&P2SEL
+        ; Set P2.7 as output rest as inputs
+        BIS.B #10000000b,&P2DIR
+        ; Set P2.7 to low
+        BIC.B #10000000b,&P2OUT
+        ; Initially set to tripped state
+        MOV.W #01h,R4
+        ; Clear the keyswitch state store
+        MOV.W #00h,R5
+
+
+        ; **************************************************************
+        ; ** The main program starts here                             **
+        ; **************************************************************
+
+        ; Main Loop
+        ; Active state ?
+main:   CMP #00h,R4
+        JZ active
+        ; Tripped state ?
+        CMP #01h,R4
+        JZ trippd
+        ; Key over ride state
+        CMP #02h,R4
+        JZ overd
+        ; Loop back
+        JMP main
+        
+        ; This routine called when in a tripped state
+        ; Red LED off (P2.7)
+        ; Relay off (P1.6)
+        ; Blue LED on (P1.5)
+        ; Door LED off (P1.4)
+trippd: BIS.B #00100000b,&P1OUT
+        BIC.B #01010000b,&P1OUT
+        BIC.B #10000000b,&P2OUT
+        ; Check the keyswitch state
+        JMP chkey
+        
+        ; Called when the system is active
+        ; Red LED on (P2.7)
+        ; Relay on (P1.6)
+        ; Blue LED off (P1.5)
+        ; Door LED on (P1.4)
+active: BIS.B #10000000b,&P2OUT
+        BIC.B #00100000b,&P1OUT
+        BIS.B #01010000b,&P1OUT
+        ; Both P1.0 and P1.1 should be low
+        ; If either is high set the alarm state
+        BIT.B #00000010b,&P1IN
+        JNZ alrm
+        BIT.B #00000001b,&P1IN
+        JNZ alrm
+        ; Check the keyswitch state
+        BIT.B #00001000b,&P1IN
+        JZ sover
+        ; Jump to the checking routine
+        JMP main
+      
+        ; Set to over ride state
+sover:  MOV.W #02h,R4
+        MOV.W #00h,R5
+        JMP main
+        
+        ; Set to a tripped state
+alrm:   MOV.W #01h,R4
+        JMP main
+       
+       ; If the system is tripped and the user turns the keyswitch on then off again the system returns to active
+       ; Check if the keyswitch is already marked as low
+chkey: CMP #01h,R5
+       JZ lokey
+       ; Check if the keyswitch is low
+       BIT.B #00001000b,&P1IN
+       JZ newlw
+       JMP main
+       ; The keyswitch is low now
+newlw: MOV.W #01h,R5
+       ; Sound the buzzer so the user knows the keyswitch has been turned
+       BIS.B #10000000b,&P1OUT
+       JMP main
+       ; Check if the keyswitch has gone high
+lokey: BIT.B #00001000b,&P1IN
+       JZ nhigh
+       ; Put back into a active state
+       MOV.W #00h,R5
+       MOV.W #00h,R4
+       ; Turn off the buzzer
+       BIC.B #10000000b,&P1OUT
+nhigh: JMP main
+      
+      ; We are in keyswitch overide mode
+      ; First check if the keyswitch has changed state
+overd: BIT.B #00001000b,&P1IN
+       JNZ oover
+       CMP #00h,R5
+       JNZ ostwo
+       ; If R5 is 0 buzzer on / red LED off / Door LED off
+       BIC.B #10000000b,&P2OUT
+       BIS.B #10000000b,&P1OUT
+       BIC.B #00010000b,&P1OUT
+       MOV.W #01h,R5
+       JMP odel
+ostwo: ; If R5 is 1 buzzer off / red LED on / Door LED on   
+       BIS.B #10000000b,&P2OUT
+       BIC.B #10000000b,&P1OUT
+       BIS.B #00010000b,&P1OUT
+       MOV.W #00h,R5
+       ; Over ride delay
+odel:  MOV.W #050000,R6
+oloop: DEC.W R6
+       JNZ oloop
+       JMP main
+       
+oover: MOV.W #00h,R4
+       ; Buzzer off
+       BIC.B #10000000b,&P1OUT
+       ; Red LED on
+       BIS.B #10000000b,&P2OUT
+       JMP main
+        
+        
+                   
+;-------------------------------------------------------------------------------
+;           Interrupt Vectors
+;-------------------------------------------------------------------------------
+        ORG     0FFFEh                
+        DW      init                 
+   
+        END
